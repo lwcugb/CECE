@@ -340,6 +340,8 @@ if(CECE_HAS_FORTRAN)
     src/core/physics/megan3_kernel.F90
     src/core/physics/cece_bdsnp_fortran_bridge.cpp
     src/core/physics/bdsnp_kernel.F90
+    src/core/physics/cece_seasalt_geos12_fortran_bridge.cpp
+    src/core/physics/geos12_seasalt_kernel.F90
     src/core/cece_ingestor_bridge.cpp
   )
 endif()
@@ -564,6 +566,17 @@ target_link_libraries(test_bdsnp PRIVATE cece GTest::gtest rapidcheck rapidcheck
 add_executable(test_bdsnp_runtime tests/test_bdsnp_runtime.cpp)
 target_link_libraries(test_bdsnp_runtime PRIVATE cece GTest::gtest)
 
+# GEOS-12 Sea Salt Fortran-bridge tests (require the Fortran kernel)
+if(CECE_HAS_FORTRAN)
+  add_executable(test_seasalt_geos12 tests/test_seasalt_geos12.cpp)
+  target_link_libraries(test_seasalt_geos12 PRIVATE cece GTest::gtest)
+  target_compile_definitions(test_seasalt_geos12 PRIVATE CECE_HAS_FORTRAN)
+
+  add_executable(test_seasalt_geos12_runtime tests/test_seasalt_geos12_runtime.cpp)
+  target_link_libraries(test_seasalt_geos12_runtime PRIVATE cece GTest::gtest)
+  target_compile_definitions(test_seasalt_geos12_runtime PRIVATE CECE_HAS_FORTRAN)
+endif()
+
 if(ESMF_FOUND)
   add_executable(test_field_creation tests/test_field_creation.cpp)
   if(CECE_HAS_FORTRAN AND TARGET test_helpers)
@@ -779,6 +792,10 @@ gtest_discover_tests(test_cece_clock_properties)
 gtest_discover_tests(test_cece_clock_run_loop)
 gtest_discover_tests(test_bdsnp)
 gtest_discover_tests(test_bdsnp_runtime)
+if(CECE_HAS_FORTRAN)
+  gtest_discover_tests(test_seasalt_geos12)
+  gtest_discover_tests(test_seasalt_geos12_runtime)
+endif()
 gtest_discover_tests(test_helm_cpp PROPERTIES ENVIRONMENT "FI_PROVIDER=tcp;I_MPI_FABRICS=shm")
 gtest_discover_tests(test_regression_parity)
 

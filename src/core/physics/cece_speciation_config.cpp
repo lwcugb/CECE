@@ -91,6 +91,31 @@ SpeciationConfig SpeciationConfigLoader::ParseMechanism(const YAML::Node& node) 
         }
         sp.molecular_weight = mw_kg_per_mol * 1000.0;  // kg/mol -> g/mol
 
+        // Aerosol species declare themselves explicitly and carry size-bin properties.
+        if (entry["is_aerosol"] && entry["is_aerosol"].as<bool>()) {
+            sp.is_aerosol = true;
+            for (const char* key : {"density [kg m-3]", "lower_radius [um]", "upper_radius [um]"}) {
+                if (!entry[key]) {
+                    throw std::invalid_argument("Aerosol species '" + sp.name + "' missing required '" + key + "' field");
+                }
+            }
+            sp.density = entry["density [kg m-3]"].as<double>();
+            sp.lower_radius = entry["lower_radius [um]"].as<double>();
+            sp.upper_radius = entry["upper_radius [um]"].as<double>();
+            sp.effective_radius =
+                entry["effective_radius [um]"] ? entry["effective_radius [um]"].as<double>() : 0.5 * (sp.lower_radius + sp.upper_radius);
+
+            if (sp.density <= 0.0) {
+                throw std::invalid_argument("Aerosol species '" + sp.name + "' has non-positive density");
+            }
+            if (sp.lower_radius <= 0.0 || sp.upper_radius <= 0.0) {
+                throw std::invalid_argument("Aerosol species '" + sp.name + "' has non-positive radius bounds");
+            }
+            if (sp.lower_radius >= sp.upper_radius) {
+                throw std::invalid_argument("Aerosol species '" + sp.name + "' requires lower_radius < upper_radius");
+            }
+        }
+
         config.species.push_back(sp);
     }
 
@@ -190,13 +215,27 @@ void SpeciationConfigLoader::ParseMapping(const YAML::Node& node, SpeciationConf
             }
 
             EmissionClass ec;
-            if (!StringToEmissionClass(class_name, ec)) {
+            bool resolved = StringToEmissionClass(class_name, ec);
+            if (!resolved) {
                 std::string upper_name = class_name;
                 std::transform(upper_name.begin(), upper_name.end(), upper_name.begin(), ::toupper);
-                if (!StringToEmissionClass(upper_name, ec)) {
+                resolved = StringToEmissionClass(upper_name, ec);
+            }
+            if (!resolved) {
+                // Aerosol identity source: the class names an aerosol species (size
+                // bin) defined in the mechanism rather than a gas emission class.
+                bool is_aerosol_source = false;
+                for (const auto& sp : config.species) {
+                    if (sp.name == class_name && sp.is_aerosol) {
+                        is_aerosol_source = true;
+                        break;
+                    }
+                }
+                if (!is_aerosol_source) {
                     throw std::invalid_argument("Invalid emission class '" + class_name + "' for mechanism species '" + mechanism_species +
                                                 "' in dataset '" + dataset + "'");
                 }
+                ec = EmissionClass::COUNT;  // sentinel: aerosol identity source, not a gas class
             }
 
             double scale_factor = class_it->second.as<double>();
@@ -245,6 +284,8 @@ void SpeciationConfigLoader::Validate(const SpeciationConfig& config) {
     // Emission class validation is already done during ParseMapping (StringToEmissionClass),
     // but we double-check here for configs built programmatically
     for (const auto& mapping : config.mappings) {
+        // COUNT is the aerosol-identity sentinel (no gas emission class).
+        if (mapping.emission_class == EmissionClass::COUNT) continue;
         int ec_idx = static_cast<int>(mapping.emission_class);
         if (ec_idx < 0 || ec_idx >= static_cast<int>(EmissionClass::COUNT)) {
             throw std::invalid_argument("Invalid emission class index " + std::to_string(ec_idx) + " in mapping for mechanism species '" +
