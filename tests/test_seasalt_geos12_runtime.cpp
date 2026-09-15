@@ -12,8 +12,10 @@
 
 #include <Kokkos_Core.hpp>
 #include <cmath>
+#include <conf/config.hpp>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -80,14 +82,14 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
         return path;
     }
 
-    YAML::Node MakeConfig(bool weibull = false, double scale = 1.0) {
-        YAML::Node config;
-        config["weibull_flag"] = weibull;
-        config["scale_factor"] = scale;
-        config["mechanism_file"] = WriteMechanismFile();
-        config["speciation_file"] = WriteMapFile();
-        config["speciation_dataset"] = "SEASALT";
-        return config;
+    conf::Config MakeConfig(bool weibull = false, double scale = 1.0) {
+        std::ostringstream y;
+        y << "weibull_flag: " << (weibull ? "true" : "false") << "\n"
+          << "scale_factor: " << scale << "\n"
+          << "mechanism_file: \"" << WriteMechanismFile() << "\"\n"
+          << "speciation_file: \"" << WriteMapFile() << "\"\n"
+          << "speciation_dataset: \"SEASALT\"\n";
+        return conf::Config::from_string(y.str());
     }
 
     static DualView3D MakeField(const std::string& name, int nx, int ny, int levels, double value) {
@@ -98,7 +100,7 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
         return field;
     }
 
-    void Run(const YAML::Node& config, const Met& met, CeceExportState& export_state, int nx = 1, int ny = 1,
+    void Run(conf::Config config, const Met& met, CeceExportState& export_state, int nx = 1, int ny = 1,
              CeceDiagnosticManager* diag = nullptr) {
         CeceImportState import_state;
         import_state.fields["frocean"] = MakeField("frocean", nx, ny, 1, met.frocean);
@@ -118,7 +120,7 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
         }
 
         SeaSaltGeos12FortranScheme scheme;
-        scheme.Initialize(config, diag);
+        scheme.Initialize(config.root(), diag);
         scheme.Run(import_state, export_state);
     }
 

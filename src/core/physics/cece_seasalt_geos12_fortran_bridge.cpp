@@ -66,11 +66,11 @@ static PhysicsRegistration<SeaSaltGeos12FortranScheme> register_scheme("sea_salt
 // Initialize
 // ============================================================================
 
-void SeaSaltGeos12FortranScheme::Initialize(const YAML::Node& config, CeceDiagnosticManager* diag_manager) {
+void SeaSaltGeos12FortranScheme::Initialize(const conf::Value& config, CeceDiagnosticManager* diag_manager) {
     BasePhysicsScheme::Initialize(config, diag_manager);
 
-    if (config["weibull_flag"]) weibull_flag_ = config["weibull_flag"].as<bool>();
-    if (config["scale_factor"]) scale_factor_ = config["scale_factor"].as<double>();
+    if (config["weibull_flag"].is_defined()) weibull_flag_ = config["weibull_flag"].as_bool();
+    if (config["scale_factor"].is_defined()) scale_factor_ = config["scale_factor"].as_double();
 
     // Per-bin properties come from the shared MICM mechanism file; the map's
     // aerosol dataset selects which bins (and their emission scale) to emit,
@@ -78,9 +78,9 @@ void SeaSaltGeos12FortranScheme::Initialize(const YAML::Node& config, CeceDiagno
     std::string mechanism_file = "data/speciation/spc_cb6_gocart.yaml";
     std::string speciation_file = "data/speciation/map_cb6_gocart.yaml";
     std::string dataset = "SEASALT";
-    if (config["mechanism_file"]) mechanism_file = config["mechanism_file"].as<std::string>();
-    if (config["speciation_file"]) speciation_file = config["speciation_file"].as<std::string>();
-    if (config["speciation_dataset"]) dataset = config["speciation_dataset"].as<std::string>();
+    if (config["mechanism_file"].is_defined()) mechanism_file = config["mechanism_file"].as_string();
+    if (config["speciation_file"].is_defined()) speciation_file = config["speciation_file"].as_string();
+    if (config["speciation_dataset"].is_defined()) dataset = config["speciation_dataset"].as_string();
 
     SpeciationConfigLoader loader;
     const SpeciationConfig spec = loader.Load(mechanism_file, speciation_file, dataset);

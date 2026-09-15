@@ -7,9 +7,11 @@
 #include <gtest/gtest.h>
 
 #include <Kokkos_Core.hpp>
+#include <conf/config.hpp>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -52,14 +54,15 @@ std::string WriteMapFile(const std::string& tag) {
     return path;
 }
 
-YAML::Node ValidConfig() {
-    YAML::Node config;
-    config["weibull_flag"] = false;
-    config["scale_factor"] = 1.0;
-    config["mechanism_file"] = WriteMechanismFile("valid");
-    config["speciation_file"] = WriteMapFile("valid");
-    config["speciation_dataset"] = "SEASALT";
-    return config;
+// Builds an in-memory conf config referencing the given mechanism/map files.
+conf::Config MakeConfig(const std::string& mechanism_file, const std::string& speciation_file, const std::string& dataset = "SEASALT") {
+    std::ostringstream y;
+    y << "weibull_flag: false\n"
+      << "scale_factor: 1.0\n"
+      << "mechanism_file: \"" << mechanism_file << "\"\n"
+      << "speciation_file: \"" << speciation_file << "\"\n"
+      << "speciation_dataset: \"" << dataset << "\"\n";
+    return conf::Config::from_string(y.str());
 }
 
 DualView3D MakeField(const std::string& name, int nx, int ny, int levels, double value) {
@@ -102,32 +105,30 @@ TEST(SeaSaltGeos12SchemeTest, FactoryCreatesScheme) {
 #endif
 
 TEST(SeaSaltGeos12SchemeTest, ValidConfigurationInitializes) {
+    conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
     SeaSaltGeos12FortranScheme scheme;
-    EXPECT_NO_THROW(scheme.Initialize(ValidConfig(), nullptr));
+    EXPECT_NO_THROW(scheme.Initialize(cfg.root(), nullptr));
 }
 
 TEST(SeaSaltGeos12SchemeTest, MissingMechanismFileFails) {
-    YAML::Node config = ValidConfig();
-    config["mechanism_file"] = "/nonexistent/path/spc.yaml";
+    conf::Config cfg = MakeConfig("/nonexistent/path/spc.yaml", WriteMapFile("valid"));
     SeaSaltGeos12FortranScheme scheme;
-    EXPECT_THROW(scheme.Initialize(config, nullptr), std::runtime_error);
+    EXPECT_THROW(scheme.Initialize(cfg.root(), nullptr), std::runtime_error);
 }
 
 TEST(SeaSaltGeos12SchemeTest, MalformedMechanismFileFails) {
     const std::string path = (std::filesystem::temp_directory_path() / "cece_seasalt_geos12_bad_spc.yaml").string();
     std::ofstream(path) << "name: BAD\nspecies:\n  - name: SS001\n    molecular weight [kg mol-1]: 0.05844\n    is_aerosol: true\n"
                         << "    density [kg m-3]: 2200.0\n    lower_radius [um]: 0.5\n    upper_radius [um]: 0.1\n";  // lower >= upper
-    YAML::Node config = ValidConfig();
-    config["mechanism_file"] = path;
+    conf::Config cfg = MakeConfig(path, WriteMapFile("valid"));
     SeaSaltGeos12FortranScheme scheme;
-    EXPECT_THROW(scheme.Initialize(config, nullptr), std::invalid_argument);
+    EXPECT_THROW(scheme.Initialize(cfg.root(), nullptr), std::invalid_argument);
 }
 
 TEST(SeaSaltGeos12SchemeTest, OptionalEffectiveRadiusInitializes) {
-    YAML::Node config = ValidConfig();
-    config["mechanism_file"] = WriteMechanismFile("no_radius", /*with_radius=*/false);
+    conf::Config cfg = MakeConfig(WriteMechanismFile("no_radius", /*with_radius=*/false), WriteMapFile("valid"));
     SeaSaltGeos12FortranScheme scheme;
-    EXPECT_NO_THROW(scheme.Initialize(config, nullptr));
+    EXPECT_NO_THROW(scheme.Initialize(cfg.root(), nullptr));
 }
 
 #ifdef CECE_HAS_FORTRAN
@@ -138,7 +139,8 @@ TEST(SeaSaltGeos12SchemeTest, MissingImportFieldsLeaveOutputsUnchanged) {
     AddOutputs(export_state, 1, 1, 5);
 
     SeaSaltGeos12FortranScheme scheme;
-    scheme.Initialize(ValidConfig(), nullptr);
+    conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
+    scheme.Initialize(cfg.root(), nullptr);
     EXPECT_NO_THROW(scheme.Run(import_state, export_state));
 
     auto& mass = export_state.fields.at("seasalt_mass_SS001");
@@ -153,7 +155,8 @@ TEST(SeaSaltGeos12SchemeTest, ProducesNonNegativeEmissionsOverOcean) {
     AddOutputs(export_state, 1, 1, 5);
 
     SeaSaltGeos12FortranScheme scheme;
-    scheme.Initialize(ValidConfig(), nullptr);
+    conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
+    scheme.Initialize(cfg.root(), nullptr);
     scheme.Run(import_state, export_state);
 
     // The -1.0 sentinel is overwritten with a physical (non-negative) flux.
