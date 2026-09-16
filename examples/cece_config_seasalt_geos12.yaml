@@ -66,31 +66,31 @@ physics_schemes:
 cece_data:
   streams:
     - name: OFFLINE_MET1
-      file: /scratch4/NAGAPE/arl/Wei.K.Li/Data/MERRA2/MERRA2.20150101.CN.05x0625.nc4   
+      file: /scratch4/NAGAPE/arl/Wei.K.Li/Data/MERRA2/MERRA2.20150101.CN.05x0625.nc4
       yearFirst: 2015
       yearLast: 2015
       yearAlign: 2015
-      taxmode: cycle                    # cycle | extend
-      tintalgo: nearest                  # linear | nearest
-      mapalgo: bilinear                 # bilinear | consd | nn | ...
+      taxmode: cycle # cycle | extend
+      tintalgo: nearest # linear | nearest
+      mapalgo: bilinear # bilinear | consd | nn | ...
       variables:
-        - { file: FROCEAN,  model: FROCEAN }   # model must match input_mapping RHS
+        - { file: FROCEAN, model: FROCEAN } # model must match input_mapping RHS
     - name: OFFLINE_MET2
-      file: /scratch4/NAGAPE/arl/Wei.K.Li/Data/MERRA2/MERRA2.20211220.A1.05x0625.nc4  
+      file: /scratch4/NAGAPE/arl/Wei.K.Li/Data/MERRA2/MERRA2.20211220.A1.05x0625.nc4
       yearFirst: 2021
       yearLast: 2021
       yearAlign: 2021
-      taxmode: cycle                    # cycle | extend
-      tintalgo: linear                  # linear | nearest
-      mapalgo: bilinear                 # bilinear | consd | nn | ...
-      variables: 
-        - { file: FRSEAICE, model: FRSEAICE }  # model must match input_mapping RHS
+      taxmode: cycle # cycle | extend
+      tintalgo: linear # linear | nearest
+      mapalgo: bilinear # bilinear | consd | nn | ...
+      variables:
+        - { file: FRSEAICE, model: FRSEAICE } # model must match input_mapping RHS
         # LAT/LON are supplied automatically by the driver from the F360 grid
         # coordinates (no need to read them from files).
-        - { file: TS,      model: SST }     #surface temperature as sea surface temperature
-        - { file: U10M,     model: U10M }
-        - { file: V10M,     model: V10M }
-        - { file: USTAR,    model: USTAR }
+        - { file: TS, model: SST } #surface temperature as sea surface temperature
+        - { file: U10M, model: U10M }
+        - { file: V10M, model: V10M }
+        - { file: USTAR, model: USTAR }
 
 # Enumerate the output fields to persist to NetCDF. The names here are the
 # external (mapped) names from output_mapping above.

@@ -47,8 +47,12 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
         static const char* kNames[kNs] = {"SS001", "SS002", "SS003", "SS004", "SS005"};
         return kNames[n];
     }
-    static std::string MassField(int n) { return std::string("seasalt_mass_") + BinName(n); }
-    static std::string NumberField(int n) { return std::string("seasalt_number_") + BinName(n); }
+    static std::string MassField(int n) {
+        return std::string("seasalt_mass_") + BinName(n);
+    }
+    static std::string NumberField(int n) {
+        return std::string("seasalt_number_") + BinName(n);
+    }
 
     std::vector<double> density_{2200.0, 2200.0, 2200.0, 2200.0, 2200.0};
     std::vector<double> r_low_{0.03, 0.1, 0.5, 1.5, 5.0};
@@ -100,8 +104,7 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
         return field;
     }
 
-    void Run(conf::Config config, const Met& met, CeceExportState& export_state, int nx = 1, int ny = 1,
-             CeceDiagnosticManager* diag = nullptr) {
+    void Run(conf::Config config, const Met& met, CeceExportState& export_state, int nx = 1, int ny = 1, CeceDiagnosticManager* diag = nullptr) {
         CeceImportState import_state;
         import_state.fields["frocean"] = MakeField("frocean", nx, ny, 1, met.frocean);
         import_state.fields["frseaice"] = MakeField("frseaice", nx, ny, 1, met.frseaice);

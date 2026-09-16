@@ -48,10 +48,13 @@ SpeciationConfig SpeciationConfigLoader::ParseMechanism(const conf::Value& node)
             sp.density = entry["density [kg m-3]"].as_double();
             sp.lower_radius = entry["lower_radius [um]"].as_double();
             sp.upper_radius = entry["upper_radius [um]"].as_double();
-            sp.effective_radius = entry["effective_radius [um]"] ? entry["effective_radius [um]"].as_double() : 0.5 * (sp.lower_radius + sp.upper_radius);
+            sp.effective_radius =
+                entry["effective_radius [um]"] ? entry["effective_radius [um]"].as_double() : 0.5 * (sp.lower_radius + sp.upper_radius);
             if (sp.density <= 0.0) throw std::invalid_argument("Aerosol species '" + sp.name + "' has non-positive density");
-            if (sp.lower_radius <= 0.0 || sp.upper_radius <= 0.0) throw std::invalid_argument("Aerosol species '" + sp.name + "' has non-positive radius bounds");
-            if (sp.lower_radius >= sp.upper_radius) throw std::invalid_argument("Aerosol species '" + sp.name + "' requires lower_radius < upper_radius");
+            if (sp.lower_radius <= 0.0 || sp.upper_radius <= 0.0)
+                throw std::invalid_argument("Aerosol species '" + sp.name + "' has non-positive radius bounds");
+            if (sp.lower_radius >= sp.upper_radius)
+                throw std::invalid_argument("Aerosol species '" + sp.name + "' requires lower_radius < upper_radius");
         }
 
         config.species.push_back(std::move(sp));
