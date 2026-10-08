@@ -1,7 +1,7 @@
 /**
  * @file test_seasalt_geos12.cpp
- * @brief Registration and configuration-contract checks for the GEOS-12 sea
- *        salt Fortran bridge scheme.
+ * @brief Registration and configuration-contract checks for the native GEOS-12
+ *        sea salt Kokkos scheme.
  */
 
 #include <gtest/gtest.h>
@@ -18,7 +18,7 @@
 
 #include "cece/cece_physics_factory.hpp"
 #include "cece/cece_state.hpp"
-#include "cece/physics/cece_seasalt_geos12_fortran.hpp"
+#include "cece/physics/cece_seasalt_geos12.hpp"
 
 namespace cece {
 namespace {
@@ -95,24 +95,22 @@ void AddOutputs(CeceExportState& export_state, int nx, int ny, int ns) {
     export_state.fields["seasalt_number_total"] = MakeField("seasalt_number_total", nx, ny, 1, -1.0);
 }
 
-#ifdef CECE_HAS_FORTRAN
 TEST(SeaSaltGeos12SchemeTest, FactoryCreatesScheme) {
     PhysicsSchemeConfig config;
-    config.name = "sea_salt_geos12_fortran";
+    config.name = "sea_salt_geos12";
     auto scheme = PhysicsFactory::CreateScheme(config);
     EXPECT_NE(scheme, nullptr);
 }
-#endif
 
 TEST(SeaSaltGeos12SchemeTest, ValidConfigurationInitializes) {
     conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     EXPECT_NO_THROW(scheme.Initialize(cfg.root(), nullptr));
 }
 
 TEST(SeaSaltGeos12SchemeTest, MissingMechanismFileFails) {
     conf::Config cfg = MakeConfig("/nonexistent/path/spc.yaml", WriteMapFile("valid"));
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     EXPECT_THROW(scheme.Initialize(cfg.root(), nullptr), std::runtime_error);
 }
 
@@ -121,24 +119,23 @@ TEST(SeaSaltGeos12SchemeTest, MalformedMechanismFileFails) {
     std::ofstream(path) << "name: BAD\nspecies:\n  - name: SS001\n    molecular weight [kg mol-1]: 0.05844\n    is_aerosol: true\n"
                         << "    density [kg m-3]: 2200.0\n    lower_radius [um]: 0.5\n    upper_radius [um]: 0.1\n";  // lower >= upper
     conf::Config cfg = MakeConfig(path, WriteMapFile("valid"));
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     EXPECT_THROW(scheme.Initialize(cfg.root(), nullptr), std::invalid_argument);
 }
 
 TEST(SeaSaltGeos12SchemeTest, OptionalEffectiveRadiusInitializes) {
     conf::Config cfg = MakeConfig(WriteMechanismFile("no_radius", /*with_radius=*/false), WriteMapFile("valid"));
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     EXPECT_NO_THROW(scheme.Initialize(cfg.root(), nullptr));
 }
 
-#ifdef CECE_HAS_FORTRAN
 TEST(SeaSaltGeos12SchemeTest, MissingImportFieldsLeaveOutputsUnchanged) {
     CeceImportState import_state;
     CeceExportState export_state;
     // Provide outputs but omit all imports so Run returns early.
     AddOutputs(export_state, 1, 1, 5);
 
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
     scheme.Initialize(cfg.root(), nullptr);
     EXPECT_NO_THROW(scheme.Run(import_state, export_state));
@@ -154,7 +151,7 @@ TEST(SeaSaltGeos12SchemeTest, ProducesNonNegativeEmissionsOverOcean) {
     AddOceanImports(import_state, 1, 1);
     AddOutputs(export_state, 1, 1, 5);
 
-    SeaSaltGeos12FortranScheme scheme;
+    SeaSaltGeos12Scheme scheme;
     conf::Config cfg = MakeConfig(WriteMechanismFile("valid"), WriteMapFile("valid"));
     scheme.Initialize(cfg.root(), nullptr);
     scheme.Run(import_state, export_state);
@@ -167,7 +164,6 @@ TEST(SeaSaltGeos12SchemeTest, ProducesNonNegativeEmissionsOverOcean) {
     EXPECT_GE(mass.view_host()(0, 0, 0), 0.0);
     EXPECT_GE(total.view_host()(0, 0, 0), mass.view_host()(0, 0, 0));
 }
-#endif
 
 }  // namespace
 }  // namespace cece

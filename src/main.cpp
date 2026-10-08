@@ -447,20 +447,35 @@ int main(int argc, char* argv[]) {
 
         // Publish the destination grid's coordinates as 2-D LAT/LON import
         // fields so physics schemes can consume them without reading
-        // coordinates from offline files. Uses the same coordinate arrays that
-        // define the compute grid.
-        if (has_file_coords) {
-            std::vector<double> lon2d(static_cast<std::size_t>(nx) * ny);
-            std::vector<double> lat2d(static_cast<std::size_t>(nx) * ny);
-            for (int j = 0; j < ny; ++j) {
+        // coordinates from offline files. These are band-local (nx x ny_local)
+        // using this rank's latitude band, matching the met import and export
+        // field geometry so per-cell lat/lon line up with the compute band.
+        if (has_file_coords && band.ny_local > 0) {
+            const std::size_t band_cells = static_cast<std::size_t>(nx) * band.ny_local;
+            std::vector<double> lon2d(band_cells);
+            std::vector<double> lat2d(band_cells);
+            if (ny == 1) {
+                // Single-row / unstructured (UGRID) mesh: the whole mesh is one
+                // band row owned by a single rank, and each of the nx cells
+                // carries its own lon AND lat (both length-nx, varying along i).
                 for (int i = 0; i < nx; ++i) {
-                    const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(nx) * j;
-                    lon2d[idx] = file_lons[i];
-                    lat2d[idx] = file_lats[j];
+                    lon2d[i] = file_lons[i];
+                    lat2d[i] = file_lats[i];
+                }
+            } else {
+                // Structured lat-lon grid: lon varies along i, lat is constant
+                // along a row and indexed by this rank's latitude band [j0, j1).
+                for (int jrel = 0; jrel < band.ny_local; ++jrel) {
+                    const int jglob = band.j0 + jrel;
+                    for (int i = 0; i < nx; ++i) {
+                        const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(nx) * jrel;
+                        lon2d[idx] = file_lons[i];
+                        lat2d[idx] = file_lats[jglob];
+                    }
                 }
             }
-            cece_core_set_import_field(cece_data_ptr, "LON", 3, lon2d.data(), nx, ny, 1, &rc);
-            if (rc >= 0) cece_core_set_import_field(cece_data_ptr, "LAT", 3, lat2d.data(), nx, ny, 1, &rc);
+            cece_core_set_import_field(cece_data_ptr, "LON", 3, lon2d.data(), nx, band.ny_local, 1, &rc);
+            if (rc >= 0) cece_core_set_import_field(cece_data_ptr, "LAT", 3, lat2d.data(), nx, band.ny_local, 1, &rc);
             if (rc < 0) {
                 cece::LogFatal("[DRIVER FATAL] (rank " + std::to_string(my_rank) + ") failed to publish grid LAT/LON import fields");
                 return rc;

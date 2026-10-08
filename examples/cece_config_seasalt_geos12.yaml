@@ -29,31 +29,33 @@ driver:
     lat_max: 90.0
 
 physics_schemes:
-  - name: sea_salt_geos12_fortran
-    input_mapping:
-      frocean: FROCEAN
-      frseaice: FRSEAICE
-      lat: LAT
-      lon: LON
-      sst: SST
-      u10m: U10M
-      v10m: V10M
-      ustar: USTAR
-    output_mapping:
-      # scheme-internal name -> name written to the output file
-      seasalt_mass_seas1: SEAS1_MASS
-      seasalt_mass_seas2: SEAS2_MASS
-      seasalt_mass_seas3: SEAS3_MASS
-      seasalt_mass_seas4: SEAS4_MASS
-      seasalt_mass_seas5: SEAS5_MASS
-      seasalt_number_seas1: SEAS1_NUMB
-      seasalt_number_seas2: SEAS2_NUMB
-      seasalt_number_seas3: SEAS3_NUMB
-      seasalt_number_seas4: SEAS4_NUMB
-      seasalt_number_seas5: SEAS5_NUMB
-      seasalt_mass_total: SS_MASS_TOTAL
-      seasalt_number_total: SS_NUMB_TOTAL
+  - name: sea_salt_geos12
     options:
+      # input_mapping/output_mapping MUST live under options: the config parser
+      # only forwards the options node to the scheme's Initialize.
+      input_mapping:
+        frocean: FROCEAN
+        frseaice: FRSEAICE
+        lat: LAT
+        lon: LON
+        sst: SST
+        u10m: U10M
+        v10m: V10M
+        ustar: USTAR
+      output_mapping:
+        # scheme-internal name -> name written to the output file
+        seasalt_mass_seas1: SEAS1_MASS
+        seasalt_mass_seas2: SEAS2_MASS
+        seasalt_mass_seas3: SEAS3_MASS
+        seasalt_mass_seas4: SEAS4_MASS
+        seasalt_mass_seas5: SEAS5_MASS
+        seasalt_number_seas1: SEAS1_NUMB
+        seasalt_number_seas2: SEAS2_NUMB
+        seasalt_number_seas3: SEAS3_NUMB
+        seasalt_number_seas4: SEAS4_NUMB
+        seasalt_number_seas5: SEAS5_NUMB
+        seasalt_mass_total: SS_MASS_TOTAL
+        seasalt_number_total: SS_NUMB_TOTAL
       weibull_flag: false
       scale_factor: 1.0
       # Bin properties + names come from the shared mechanism file; the aerosol

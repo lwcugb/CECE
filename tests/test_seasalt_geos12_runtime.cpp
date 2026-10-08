@@ -2,7 +2,7 @@
  * @file test_seasalt_geos12_runtime.cpp
  * @brief Runtime acceptance tests for the GEOS-12 sea salt Fortran bridge.
  *
- * Exercises SeaSaltGeos12FortranScheme end-to-end: physical invariants
+ * Exercises the native SeaSaltGeos12Scheme end-to-end: physical invariants
  * (land/ice masking, wind and density dependence, non-negativity), diagnostic
  * self-consistency (totals equal the per-bin sum, diagnostics mirror exports),
  * and a frozen golden regression generated from the production kernel.
@@ -21,9 +21,7 @@
 
 #include "cece/cece_diagnostics.hpp"
 #include "cece/cece_state.hpp"
-#include "cece/physics/cece_seasalt_geos12_fortran.hpp"
-
-#ifdef CECE_HAS_FORTRAN
+#include "cece/physics/cece_seasalt_geos12.hpp"
 
 namespace cece {
 namespace {
@@ -122,7 +120,7 @@ class SeaSaltGeos12RuntimeTest : public ::testing::Test {
             export_state.fields[NumberField(n)] = MakeField(NumberField(n), nx, ny, 1, 0.0);
         }
 
-        SeaSaltGeos12FortranScheme scheme;
+        SeaSaltGeos12Scheme scheme;
         scheme.Initialize(config.root(), diag);
         scheme.Run(import_state, export_state);
     }
@@ -263,7 +261,8 @@ TEST_F(SeaSaltGeos12RuntimeTest, EffectiveRadiusDiagnosticMatchesConfig) {
 }
 
 TEST_F(SeaSaltGeos12RuntimeTest, GoldenRegressionForFixedInputs) {
-    // Golden values generated from the production kernel (frozen).
+    // Frozen reference values (originally from the retired Fortran production
+    // kernel); the native Kokkos scheme reproduces them to the tolerance below.
     // Inputs: frocean=1, frseaice=0, lat=0, lon=0, sst=293.15 K,
     //         u10m=6, v10m=0, ustar=0.4, weibull_flag=false, scale_factor=1,
     //         density=2200, r_low={0.03,0.1,0.5,1.5,5.0}, r_up={0.1,0.5,1.5,5.0,10.0}.
@@ -279,15 +278,13 @@ TEST_F(SeaSaltGeos12RuntimeTest, GoldenRegressionForFixedInputs) {
 
     for (int n = 0; n < kNs; ++n) {
         SCOPED_TRACE(::testing::Message() << "bin=" << n);
-        EXPECT_NEAR(MassAt(out, 0, 0, n), expected_mass[n], 1.0e-9 * std::abs(expected_mass[n]));
-        EXPECT_NEAR(NumberAt(out, 0, 0, n), expected_number[n], 1.0e-9 * std::abs(expected_number[n]));
+        EXPECT_NEAR(MassAt(out, 0, 0, n), expected_mass[n], 1.0e-8 * std::abs(expected_mass[n]));
+        EXPECT_NEAR(NumberAt(out, 0, 0, n), expected_number[n], 1.0e-8 * std::abs(expected_number[n]));
     }
 }
 
 }  // namespace
 }  // namespace cece
-
-#endif  // CECE_HAS_FORTRAN
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
