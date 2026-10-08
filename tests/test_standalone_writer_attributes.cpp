@@ -5,6 +5,7 @@
 #include <netcdf.h>
 
 #include <Kokkos_Core.hpp>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -66,6 +67,22 @@ class StandaloneWriterAttributesTest : public ::testing::Test {
         if (rc == NC_NOERR) {
             std::string text(length, '\0');
             EXPECT_EQ(nc_get_att_text(nc_id, var_id, attribute.c_str(), text.data()), NC_NOERR);
+            value = text;
+        }
+        nc_close(nc_id);
+        return value;
+    }
+
+    static std::optional<std::string> ReadGlobalTextAttribute(const fs::path& nc_path, const std::string& attribute) {
+        int nc_id = -1;
+        EXPECT_EQ(nc_open(nc_path.c_str(), NC_NOWRITE, &nc_id), NC_NOERR) << "cannot open " << nc_path;
+
+        size_t length = 0;
+        const int rc = nc_inq_attlen(nc_id, NC_GLOBAL, attribute.c_str(), &length);
+        std::optional<std::string> value;
+        if (rc == NC_NOERR) {
+            std::string text(length, '\0');
+            EXPECT_EQ(nc_get_att_text(nc_id, NC_GLOBAL, attribute.c_str(), text.data()), NC_NOERR);
             value = text;
         }
         nc_close(nc_id);
@@ -154,16 +171,16 @@ TEST_F(StandaloneWriterAttributesTest, ConfiguredFieldAttributesReachTheOutput) 
     EXPECT_EQ(*long_name, "carbon_monoxide_emission_flux");
 }
 
-}  // namespace
+TEST_F(StandaloneWriterAttributesTest, GlobalAttributesEscapeYamlQuotesAndBackslashes) {
+    cece::CeceOutputConfig config = BaseConfig();
+    config.global_attributes["title"] = R"(Run "quoted" with \ path)";
 
-// Custom main: AMIO requires an initialized MPI environment, and the writer
-// uses Kokkos views — both are process-wide lifecycles owned here.
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    MPI_Init(&argc, &argv);
-    Kokkos::initialize(argc, argv);
-    const int rc = RUN_ALL_TESTS();
-    Kokkos::finalize();
-    MPI_Finalize();
-    return rc;
+    const fs::path nc_path = WriteOneStep(config);
+    ASSERT_TRUE(fs::exists(nc_path)) << nc_path << " was not written";
+
+    const auto title = ReadGlobalTextAttribute(nc_path, "title");
+    ASSERT_TRUE(title.has_value());
+    EXPECT_EQ(*title, R"(Run "quoted" with \ path)");
 }
+
+}  // namespace

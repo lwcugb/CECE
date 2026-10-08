@@ -1,6 +1,6 @@
 import os
-import sys
 import subprocess
+import sys
 
 # Add scripts directory to path to test functions directly if needed
 sys.path.insert(
@@ -36,7 +36,7 @@ def test_download_hemco_data_cli():
 
     # Test help message
     result = subprocess.run(
-        [sys.executable, script, "--help"], capture_output=True, text=True
+        [sys.executable, script, "--help"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0
     assert "Download HEMCO data" in result.stdout
@@ -48,7 +48,9 @@ def test_hemco_to_cece_cli_error():
     )
 
     # Test missing argument
-    result = subprocess.run([sys.executable, script], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, script], capture_output=True, text=True, check=False
+    )
     assert result.returncode != 0
     assert "the following arguments are required" in result.stderr
 
@@ -68,8 +70,108 @@ def test_visualize_stack_cli(tmp_path):
     # Note: we might want to mock matplotlib to avoid GUI/window issues if it was a real environment,
     # but here it's likely headless. We'll just check if it runs without error.
     result = subprocess.run(
-        [sys.executable, script, str(config)], capture_output=True, text=True
+        [sys.executable, script, str(config)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert result.returncode == 0
     assert "--- Stacking Plan for NO2 ---" in result.stdout
     assert "Saved stacking plan visualization" in result.stdout
+
+
+# ── scripts/build-and-test-container.py ──────────────────────────────────────
+# The module name is hyphenated, so it is loaded by path rather than imported.
+# Nothing here runs docker: the build phase's bash command is a pure function
+# and the docker invocation is captured by replacing subprocess.check_call.
+
+
+def _load_build_script():
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent.parent
+        / "scripts"
+        / "build-and-test-container.py"
+    )
+    spec = importlib.util.spec_from_file_location("build_and_test_container", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_build_command_default_builds_all_at_bounded_jobs():
+    btc = _load_build_script()
+    command = btc.build_command("/work", None, 8)
+    configure, build = command.split(" && ")
+    assert configure.startswith("[ -f /work/build/CMakeCache.txt ] || cmake -S /work")
+    assert "-DCECE_MPIEXEC_CONTAINER_FLAGS=ON" in configure
+    assert build == "cmake --build /work/build -j 8"
+    assert "--target" not in command
+
+
+def test_build_command_single_and_repeated_targets():
+    btc = _load_build_script()
+    single = btc.build_command("/work", ["cece_standalone_driver"], 4)
+    assert single.endswith(
+        "cmake --build /work/build -j 4 --target cece_standalone_driver"
+    )
+    double = btc.build_command("/work", ["a", "b"], 4)
+    assert double.endswith("cmake --build /work/build -j 4 --target a --target b")
+
+
+def test_parse_args_defaults(monkeypatch):
+    btc = _load_build_script()
+    monkeypatch.setattr(sys, "argv", ["build-and-test-container.py"])
+    args = btc.parse_args()
+    assert args.target is None
+    assert args.jobs == (os.cpu_count() or 1)
+    assert args.mount == "/work"
+    assert args.image == "cece/cece-dev"
+    assert not args.no_build and not args.no_test and not args.clean
+
+
+def test_parse_args_target_repeatable_and_jobs(monkeypatch):
+    btc = _load_build_script()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build-and-test-container.py",
+            "--target",
+            "a",
+            "--target",
+            "b",
+            "--jobs",
+            "4",
+        ],
+    )
+    args = btc.parse_args()
+    assert args.target == ["a", "b"]
+    assert args.jobs == 4
+
+
+def test_parse_args_rejects_non_positive_jobs(monkeypatch):
+    import pytest
+
+    btc = _load_build_script()
+    for bad in ("0", "-1"):
+        monkeypatch.setattr(sys, "argv", ["build-and-test-container.py", "--jobs", bad])
+        with pytest.raises(SystemExit):
+            btc.parse_args()
+
+
+def test_build_passes_command_to_container(monkeypatch):
+    btc = _load_build_script()
+    calls = []
+    monkeypatch.setattr(btc.subprocess, "check_call", calls.append)
+
+    btc.build("img:tag", "/work", ["cece_standalone_driver"], 4)
+
+    assert len(calls) == 1
+    argv = calls[0]
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert f"{btc.REPO_ROOT}:/work" in argv
+    assert argv[-4:-1] == ["img:tag", "/bin/bash", "-c"]
+    assert argv[-1] == btc.build_command("/work", ["cece_standalone_driver"], 4)

@@ -1,0 +1,600 @@
+"""Unit tests for scripts/verify_submodules.py.
+
+Fully offline: `git ls-remote` is never run. Tests that verify the live
+checkout answer it through `offline_git`, which stubs that one verb and
+delegates every other git call to the real function; an autouse guard fails
+any test that would reach the network without a stub.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+# Add scripts directory to sys.path
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+import verify_submodules as vsm  # the module; `verify_submodules` below is its function
+from verify_submodules import (
+    SubmoduleStatus,
+    UpstreamRemoteConfig,
+    VerificationStatus,
+    generate_step_summary,
+    get_declared_submodules,
+    get_remote_branch_head_sha,
+    get_submodule_remote_url,
+    get_web_url_from_remote,
+    is_submodule_excluded,
+    log_verification_report,
+    parse_branch_map_args,
+    parse_submodule_status_lines,
+    resolve_submodule_target_branch,
+    verify_submodules,
+)
+
+_REAL_RUN_GIT = vsm.run_git_cmd
+
+
+def offline_git(remote_heads: dict[str, str]):
+    """A run_git_cmd that answers `git ls-remote <url> refs/heads/<branch>`
+    from `remote_heads` (branch -> sha) and delegates every other git call to
+    the real function. Local git stays real; the network verb never runs."""
+
+    def fake(args: list[str], cwd: Path | None = None) -> tuple[int, str, str]:
+        if args and args[0] == "ls-remote":
+            ref = args[-1]
+            sha = remote_heads.get(ref.rsplit("/", 1)[-1])
+            return (0, f"{sha}\t{ref}", "") if sha else (0, "", "")
+        return _REAL_RUN_GIT(args, cwd=cwd)
+
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def _no_remote_git(monkeypatch):
+    """No test in this module may reach a remote: an unstubbed ls-remote is a
+    test bug, surfaced here instead of as a slow or flaky network call."""
+
+    def refuse(args, cwd=None):
+        if args and args[0] == "ls-remote":
+            raise AssertionError(
+                "git ls-remote reached the network; use offline_git() in this test"
+            )
+        return _REAL_RUN_GIT(args, cwd=cwd)
+
+    monkeypatch.setattr(vsm, "run_git_cmd", refuse)
+
+
+class TestVerifySubmodules(unittest.TestCase):
+    """Test suite for submodule verification functions."""
+
+    def test_parse_submodule_status_lines(self) -> None:
+        raw_output = """
+ 9e2f6751c3e276fa9c50b8443f4601c846bc3efd extern/helm (remotes/benkozi/HEAD-6-g9e2f675)
++d21b5278508a5aca4ed3ea59403cc03538b40c7d extern/helm/libs/amio (v0.1.0-53-gd21b527)
+-1234567890abcdef1234567890abcdef12345678 uninitialized/submod
+"""
+        entries = parse_submodule_status_lines(raw_output)
+        self.assertEqual(len(entries), 3)
+
+        self.assertEqual(
+            entries[0], (" ", "9e2f6751c3e276fa9c50b8443f4601c846bc3efd", "extern/helm")
+        )
+        self.assertEqual(
+            entries[1],
+            ("+", "d21b5278508a5aca4ed3ea59403cc03538b40c7d", "extern/helm/libs/amio"),
+        )
+        self.assertEqual(
+            entries[2],
+            ("-", "1234567890abcdef1234567890abcdef12345678", "uninitialized/submod"),
+        )
+
+    def test_parse_branch_map_args(self) -> None:
+        # Empty or None
+        self.assertEqual(parse_branch_map_args(None), {})
+        self.assertEqual(parse_branch_map_args([]), {})
+
+        # Valid mappings
+        mapped = parse_branch_map_args(["extern/helm=develop", "libs/amio=main"])
+        self.assertEqual(mapped, {"extern/helm": "develop", "libs/amio": "main"})
+
+        # Invalid format raises exception
+        with self.assertRaises(Exception) as ctx:
+            parse_branch_map_args(["invalid_format"])
+        self.assertIn("Invalid branch map format", str(ctx.exception))
+
+    def test_resolve_submodule_target_branch(self) -> None:
+        """Verify target branch resolution with and without branch map override."""
+        self.assertEqual(
+            resolve_submodule_target_branch(
+                sub_path="extern/helm",
+                parent_target_branch="develop",
+                branch_map={},
+            ),
+            "develop",
+        )
+        self.assertEqual(
+            resolve_submodule_target_branch(
+                sub_path="extern/helm",
+                parent_target_branch="develop",
+                branch_map={"extern/helm": "feature/custom"},
+            ),
+            "feature/custom",
+        )
+
+    def test_log_verification_report_all_ok(self) -> None:
+        statuses = [
+            SubmoduleStatus(
+                path="extern/helm",
+                current_sha="c4d2b5ab1234",
+                expected_sha="c4d2b5ab1234",
+                target_branch="develop",
+                remote_url="https://github.com/example/helm.git",
+                status="OK",
+                detail="Pointers match",
+            ),
+            SubmoduleStatus(
+                path="extern/helm/libs/amio",
+                current_sha="d21b52785678",
+                expected_sha="d21b52785678",
+                target_branch="develop",
+                remote_url="https://github.com/example/amio.git",
+                status="OK",
+                detail="Pointers match",
+                is_nested=True,
+            ),
+        ]
+
+        with self.assertLogs("verify_submodules", level="INFO") as captured:
+            all_ok = log_verification_report(
+                statuses, target_branch="develop", excluded=["extern/yaml-cpp"]
+            )
+        self.assertTrue(all_ok)
+        self.assertTrue(
+            any(
+                "Excluded from verification (1): extern/yaml-cpp" in line
+                for line in captured.output
+            )
+        )
+
+    def test_log_verification_report_mismatch(self) -> None:
+        statuses = [
+            SubmoduleStatus(
+                path="extern/helm",
+                current_sha="9e2f67510000",
+                expected_sha="c4d2b5ab0000",
+                target_branch="develop",
+                remote_url="https://github.com/example/helm.git",
+                status="OUT_OF_SYNC",
+                detail="Behind by 1 commit",
+            )
+        ]
+
+        all_ok = log_verification_report(statuses, target_branch="develop")
+        self.assertFalse(all_ok)
+
+    def test_verification_status_strenum(self) -> None:
+        """Test that VerificationStatus is a StrEnum and behaves correctly with SubmoduleStatus."""
+        # Enum values and str subclass
+        for name in ("PENDING", "OK", "OUT_OF_SYNC", "UNINITIALIZED", "ERROR"):
+            self.assertEqual(VerificationStatus[name], name)
+            self.assertIsInstance(VerificationStatus[name], str)
+
+        # Unique enum members (verified by @unique)
+        self.assertEqual(len(VerificationStatus), 5)
+        self.assertEqual(len({s.value for s in VerificationStatus}), 5)
+
+        # Initialized with enum
+        s1 = SubmoduleStatus(
+            path="sub1",
+            current_sha="1111",
+            target_branch="develop",
+            remote_url="http://example.com",
+            status=VerificationStatus.OK,
+        )
+        self.assertIs(s1.status, VerificationStatus.OK)
+        self.assertEqual(s1.status, "OK")
+
+        # Coerced from string
+        s2 = SubmoduleStatus(
+            path="sub2",
+            current_sha="2222",
+            target_branch="develop",
+            remote_url="http://example.com",
+            status="OUT_OF_SYNC",
+        )
+        self.assertIs(s2.status, VerificationStatus.OUT_OF_SYNC)
+        self.assertEqual(s2.status, "OUT_OF_SYNC")
+
+    def test_generate_step_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            summary_file = Path(tmp_dir) / "step_summary.md"
+            statuses = [
+                SubmoduleStatus(
+                    path="extern/helm",
+                    current_sha="9e2f6751",
+                    expected_sha="c4d2b5ab",
+                    target_branch="develop",
+                    remote_url="https://github.com/example/helm.git",
+                    status="OUT_OF_SYNC",
+                    detail="Behind by 1 commit",
+                )
+            ]
+
+            generate_step_summary(
+                statuses, "develop", summary_file, excluded=["extern/yaml-cpp"]
+            )
+            self.assertTrue(summary_file.exists())
+            content = summary_file.read_text(encoding="utf-8")
+            self.assertIn("## Submodule Verification Report", content)
+            self.assertIn(
+                "**Excluded from verification (1):** `extern/yaml-cpp`", content
+            )
+            self.assertIn("[`extern/helm`](https://github.com/example/helm)", content)
+            self.assertIn(
+                "[`develop`](https://github.com/example/helm/tree/develop)", content
+            )
+            self.assertIn(
+                "[`9e2f6751`](https://github.com/example/helm/commit/9e2f6751)",
+                content,
+            )
+            self.assertIn(
+                "[`c4d2b5ab`](https://github.com/example/helm/commit/c4d2b5ab)",
+                content,
+            )
+            self.assertIn(
+                "https://github.com/example/helm/compare/9e2f6751...c4d2b5ab", content
+            )
+            self.assertIn("OUT_OF_SYNC", content)
+            self.assertIn("[!WARNING]", content)
+
+    def test_get_web_url_from_remote(self) -> None:
+        self.assertEqual(
+            get_web_url_from_remote("https://github.com/NOAA-EMC/HELM.git"),
+            "https://github.com/NOAA-EMC/HELM",
+        )
+        self.assertEqual(
+            get_web_url_from_remote("git@github.com:bbakernoaa/amio.git"),
+            "https://github.com/bbakernoaa/amio",
+        )
+        self.assertEqual(
+            get_web_url_from_remote("ssh://git@github.com/owner/repo.git"),
+            "https://github.com/owner/repo",
+        )
+        self.assertIsNone(get_web_url_from_remote(""))
+
+    def test_cli_help(self) -> None:
+        """Test CLI --help exits with 0 using subprocess.check_output."""
+        script_path = SCRIPTS_DIR / "verify_submodules.py"
+        stdout = subprocess.check_output(
+            [sys.executable, str(script_path), "--help"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        self.assertIn("Verify that Git submodules", stdout)
+        self.assertIn("--target-branch", stdout)
+
+    def test_get_declared_submodules_live_repo(self) -> None:
+        """The live checkout declares exactly CECE's two submodules: HELM carries
+        AMIO in-tree (no nested .gitmodules), so the set is exact on purpose —
+        a future layout change must update this test."""
+        repo_root = SCRIPTS_DIR.parent
+        declared = get_declared_submodules(repo_root)
+        self.assertEqual(declared, {"extern/helm", "extern/yaml-cpp"})
+
+    def test_get_declared_submodules_empty_when_no_gitmodules(self) -> None:
+        """Verify get_declared_submodules returns empty set if .gitmodules is absent."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            declared = get_declared_submodules(Path(tmp_dir))
+            self.assertEqual(declared, set())
+
+    def test_get_declared_submodules_arbitrary_depth(self) -> None:
+        """Verify get_declared_submodules recursively discovers submodules beyond 2 levels."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            for parent_rel, child in [
+                ("", "sub1"),
+                ("sub1", "sub2"),
+                ("sub1/sub2", "sub3"),
+            ]:
+                target_dir = repo_root / parent_rel if parent_rel else repo_root
+                target_dir.mkdir(parents=True, exist_ok=True)
+                (target_dir / ".gitmodules").write_text(
+                    f'[submodule "{child}"]\n\tpath = {child}\n\turl = https://example.com/{child}\n',
+                    encoding="utf-8",
+                )
+
+            declared = get_declared_submodules(repo_root)
+            self.assertEqual(
+                declared,
+                {"sub1", "sub1/sub2", "sub1/sub2/sub3"},
+            )
+
+    def test_upstream_remote_config_and_branch_validation(self) -> None:
+        """Ensure verification enforces canonical remotes and rejects conflicting .gitmodules branches."""
+        config = UpstreamRemoteConfig()
+        # The one canonical remote: HELM. AMIO is in-tree in HELM, not a
+        # nested submodule, so it has no entry.
+        self.assertEqual(set(config.canonical_remotes), {"extern/helm"})
+        self.assertEqual(
+            config.canonical_remotes["extern/helm"],
+            "https://github.com/NOAA-EMC/HELM",
+        )
+
+        def _mock_git(
+            url: str = "https://github.com/NOAA-EMC/HELM.git",
+            branch: str | None = None,
+            sha: str = "9e2f6751",
+            remote_head: str | None = None,
+        ):
+            def fake_git(
+                args: list[str], cwd: Path | None = None
+            ) -> tuple[int, str, str]:
+                if "submodule" in args and "status" in args:
+                    return (0, f" {sha} extern/helm", "")
+                if "config" in args and "submodule.extern/helm.url" in args:
+                    return (0, url, "")
+                if "config" in args and "submodule.extern/helm.branch" in args:
+                    return (0, branch, "") if branch else (1, "", "key not found")
+                if "config" in args and r"^submodule\..*\.path$" in args:
+                    return (0, "submodule.extern/helm.path extern/helm", "")
+                if "ls-remote" in args and remote_head:
+                    return (
+                        0,
+                        f"{remote_head} refs/heads/{args[-1].split('/')[-1]}",
+                        "",
+                    )
+                return (0, "", "")
+
+            return fake_git
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            (repo_root / ".git").mkdir()
+            (repo_root / "extern" / "helm").mkdir(parents=True)
+
+            with patch("verify_submodules.run_git_cmd") as mock_git:
+                # 1. Test unauthorized fork drift rejection
+                mock_git.side_effect = _mock_git(
+                    url="https://github.com/attacker/HELM.git"
+                )
+                statuses_fork = verify_submodules(
+                    repo_root=repo_root,
+                    target_branch="develop",
+                    branch_map={},
+                    upstream_config=config,
+                )
+                self.assertEqual(statuses_fork[0].status, VerificationStatus.ERROR)
+                self.assertIn(
+                    "differs from canonical upstream", statuses_fork[0].detail
+                )
+
+                # 2. When targeting 'main', if .gitmodules has 'develop', it must fail
+                mock_git.side_effect = _mock_git(branch="develop")
+                statuses = verify_submodules(
+                    repo_root=repo_root,
+                    target_branch="main",
+                    branch_map={},
+                    upstream_config=config,
+                )
+                self.assertEqual(len(statuses), 1)
+                self.assertEqual(statuses[0].status, VerificationStatus.ERROR)
+                self.assertIn(
+                    "differs from parent target branch 'main'", statuses[0].detail
+                )
+
+                # 3. Test without pinned .gitmodules branch: commit matching main HEAD passes
+                mock_git.side_effect = _mock_git(sha="11112222", remote_head="11112222")
+                statuses_main = verify_submodules(
+                    repo_root=repo_root,
+                    target_branch="main",
+                    branch_map={},
+                    upstream_config=config,
+                )
+                self.assertEqual(statuses_main[0].status, VerificationStatus.OK)
+                self.assertEqual(statuses_main[0].target_branch, "main")
+
+    def test_is_submodule_excluded(self) -> None:
+        """Verify is_submodule_excluded handles exact matches, trailing slashes, and prefixes."""
+        excludes = {"extern/foo", "vendor/bar/"}
+        self.assertTrue(is_submodule_excluded("extern/foo", excludes))
+        self.assertTrue(is_submodule_excluded("extern/foo/nested", excludes))
+        self.assertTrue(is_submodule_excluded("vendor/bar", excludes))
+        self.assertTrue(is_submodule_excluded("vendor/bar/sub", excludes))
+        self.assertFalse(is_submodule_excluded("extern/foo_other", excludes))
+        self.assertFalse(is_submodule_excluded("extern/baz", excludes))
+
+    def test_default_excluded_submodules(self) -> None:
+        """Third-party submodules pinned to a release are excluded by default."""
+        config = UpstreamRemoteConfig()
+        self.assertIn("extern/yaml-cpp", config.excluded_submodules)
+        self.assertTrue(
+            is_submodule_excluded("extern/yaml-cpp", config.excluded_submodules)
+        )
+        self.assertFalse(
+            is_submodule_excluded("extern/helm", config.excluded_submodules)
+        )
+
+    def test_live_checkout_verifies_helm_offline(self) -> None:
+        """The real checkout, end to end, with only `git ls-remote` stubbed:
+        `.gitmodules`, `git submodule status`, the remote-URL lookup and the
+        canonical-remote check all run against the tree as it is."""
+        repo_root = SCRIPTS_DIR.parent
+        code, status_out, err = _REAL_RUN_GIT(
+            ["submodule", "status", "extern/helm"], cwd=repo_root
+        )
+        self.assertEqual(code, 0, err)
+        ((status_char, committed_sha, path),) = parse_submodule_status_lines(status_out)
+        self.assertEqual(path, "extern/helm")
+        self.assertNotEqual(status_char, "-", "extern/helm must be initialized")
+
+        # A developer's clone may point extern/helm at a fork; the canonical
+        # check still runs, against whatever the checkout's remote is.
+        live_remote = get_submodule_remote_url(repo_root, "extern/helm")
+        self.assertIsNotNone(live_remote)
+        defaults = UpstreamRemoteConfig()
+        config = UpstreamRemoteConfig(
+            canonical_remotes={"extern/helm": live_remote},
+            excluded_submodules=set(defaults.excluded_submodules),
+        )
+
+        # 1. Upstream HEAD == committed pointer: OK; yaml-cpp excluded by default.
+        with patch(
+            "verify_submodules.run_git_cmd", offline_git({"develop": committed_sha})
+        ):
+            statuses = verify_submodules(
+                repo_root=repo_root,
+                target_branch="develop",
+                branch_map={},
+                upstream_config=config,
+            )
+        self.assertEqual([s.path for s in statuses], ["extern/helm"])
+        self.assertEqual(statuses[0].status, VerificationStatus.OK)
+        self.assertEqual(statuses[0].expected_sha, committed_sha)
+        self.assertFalse(statuses[0].is_nested)
+
+        # 2. Upstream HEAD is some other commit: OUT_OF_SYNC, resolved locally
+        #    (rev-list on an unknown object fails gracefully -> "Drift detected").
+        with patch("verify_submodules.run_git_cmd", offline_git({"develop": "0" * 40})):
+            drifted = verify_submodules(
+                repo_root=repo_root,
+                target_branch="develop",
+                branch_map={},
+                upstream_config=config,
+            )
+        self.assertEqual(drifted[0].status, VerificationStatus.OUT_OF_SYNC)
+        self.assertIn("Drift detected", drifted[0].detail)
+
+        # 3. Excluding the top-level submodule leaves nothing to verify.
+        config_all = UpstreamRemoteConfig(
+            canonical_remotes={"extern/helm": live_remote},
+            excluded_submodules={"extern/helm", *defaults.excluded_submodules},
+        )
+        with patch(
+            "verify_submodules.run_git_cmd", offline_git({"develop": committed_sha})
+        ):
+            self.assertEqual(
+                verify_submodules(
+                    repo_root=repo_root,
+                    target_branch="develop",
+                    branch_map={},
+                    upstream_config=config_all,
+                ),
+                [],
+            )
+
+    def test_unstubbed_ls_remote_is_refused(self) -> None:
+        """The module guard: reaching for the network without offline_git fails."""
+        with self.assertRaises(AssertionError) as ctx:
+            get_remote_branch_head_sha("https://github.com/example/repo.git", "develop")
+        self.assertIn("use offline_git()", str(ctx.exception))
+
+    def test_get_gitmodules_property_nested_submodule(self) -> None:
+        """Verify _get_gitmodules_property resolves properties across nested .gitmodules files."""
+        from verify_submodules import _get_gitmodules_property
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            helm_dir = repo_root / "extern" / "helm"
+            amio_dir = helm_dir / "libs" / "amio"
+            amio_dir.mkdir(parents=True, exist_ok=True)
+
+            # Top-level .gitmodules declares extern/helm
+            (repo_root / ".gitmodules").write_text(
+                '[submodule "extern/helm"]\n\tpath = extern/helm\n\turl = https://github.com/NOAA-EMC/HELM.git\n',
+                encoding="utf-8",
+            )
+            # Nested .gitmodules declares libs/amio
+            (helm_dir / ".gitmodules").write_text(
+                '[submodule "libs/amio"]\n\tpath = libs/amio\n\turl = https://github.com/bbakernoaa/amio.git\n\tbranch = develop\n',
+                encoding="utf-8",
+            )
+
+            # Query top-level submodule
+            self.assertEqual(
+                _get_gitmodules_property(repo_root, "extern/helm", "url"),
+                "https://github.com/NOAA-EMC/HELM.git",
+            )
+            # Query nested submodule
+            self.assertEqual(
+                _get_gitmodules_property(repo_root, "extern/helm/libs/amio", "url"),
+                "https://github.com/bbakernoaa/amio.git",
+            )
+            self.assertEqual(
+                _get_gitmodules_property(repo_root, "extern/helm/libs/amio", "branch"),
+                "develop",
+            )
+
+    def test_get_submodule_remote_url(self) -> None:
+        """Verify get_submodule_remote_url handles local git dir, .gitmodules fallback, and missing paths."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_root = Path(tmp_dir)
+            sub_dir = repo_root / "extern" / "submod"
+            sub_dir.mkdir(parents=True, exist_ok=True)
+
+            # 1. Primary path: sub_dir has .git directory and git config returns URL
+            (sub_dir / ".git").mkdir()
+            with patch("verify_submodules.run_git_cmd") as mock_git:
+                mock_git.return_value = (
+                    0,
+                    "https://github.com/example/submod-local.git",
+                    "",
+                )
+                url = get_submodule_remote_url(repo_root, "extern/submod")
+                self.assertEqual(url, "https://github.com/example/submod-local.git")
+                mock_git.assert_called_with(
+                    ["config", "--get", "remote.origin.url"], cwd=sub_dir
+                )
+
+            # 2. Fallback path: sub_dir / .git absent, read from .gitmodules
+            (sub_dir / ".git").rmdir()
+            (repo_root / ".gitmodules").write_text(
+                '[submodule "extern/submod"]\n\tpath = extern/submod\n\turl = https://github.com/example/submod-fallback.git\n',
+                encoding="utf-8",
+            )
+            url_fallback = get_submodule_remote_url(repo_root, "extern/submod")
+            self.assertEqual(
+                url_fallback, "https://github.com/example/submod-fallback.git"
+            )
+
+            # 3. Missing path: submodule not in .gitmodules returns None
+            self.assertIsNone(get_submodule_remote_url(repo_root, "nonexistent/submod"))
+
+    def test_get_remote_branch_head_sha(self) -> None:
+        """Verify get_remote_branch_head_sha parses git ls-remote output and handles missing branches."""
+        with patch("verify_submodules.run_git_cmd") as mock_git:
+            # Successful match
+            mock_git.return_value = (0, "c4d2b5ab12345678\trefs/heads/develop\n", "")
+            sha = get_remote_branch_head_sha(
+                "https://github.com/example/repo.git", "develop"
+            )
+            self.assertEqual(sha, "c4d2b5ab12345678")
+
+            # Branch not found in output
+            mock_git.return_value = (
+                0,
+                "1111222233334444\trefs/heads/other-branch\n",
+                "",
+            )
+            sha_none = get_remote_branch_head_sha(
+                "https://github.com/example/repo.git", "develop"
+            )
+            self.assertIsNone(sha_none)
+
+            # Command error
+            mock_git.return_value = (1, "", "fatal: repository not found")
+            sha_err = get_remote_branch_head_sha(
+                "https://github.com/example/repo.git", "develop"
+            )
+            self.assertIsNone(sha_err)
+
+
+if __name__ == "__main__":
+    unittest.main()

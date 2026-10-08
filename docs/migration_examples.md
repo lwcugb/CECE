@@ -36,6 +36,7 @@ cece_data:
       file: "data/MACCity_4x5.nc"
     - name: "HOURLY_SCALFACT"
       file: "data/hourly.nc"
+      cadence: "hourly"   # 24-record hour-of-day profile, not a time series
 ```
 
 ---
@@ -93,8 +94,10 @@ species:
 species:
   co:
     - field: "MACCITY_CO"
+      operation: add
       category: "anthropogenic"
     - field: "AEIC_CO"
+      operation: add
       category: "aircraft"
 ```
 
@@ -115,16 +118,11 @@ species:
 
 ### [After] CECE
 ```yaml
-physics_schemes:
-  - name: "GFED"
-    language: "cpp"
-    options:
-      version: "GFED4"
-
 species:
   co:
-    - field: "MACCITY_CO"
-      operation: "add"
+    - field: "GFED_WDL"
+      operation: add
+      category: biomass_burning
 ```
 
 ---
@@ -144,10 +142,13 @@ species:
 species:
   co:
     - field: "MACCITY_CO"
-  no:
+      operation: add
+  "no":
     - field: "MACCITY_NO"
+      operation: add
   so2:
     - field: "MACCITY_SO2"
+      operation: add
 ```
 
 ---
@@ -164,7 +165,7 @@ species:
 ### [After] CECE
 ```yaml
 species:
-  no:
+  "no":
     - field: "EDGAR_NO_POW"
       category: "anthropogenic"
       operation: "add"
