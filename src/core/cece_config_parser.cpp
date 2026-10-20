@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -164,6 +165,9 @@ CeceConfig ParseConfig(const std::string& filename) {
         conf::Value streams = data["streams"];
         for (std::size_t i = 0; i < streams.size(); ++i) {
             conf::Value node = streams[i];
+            if (string_or(node, "source") == "earthaccess") {
+                continue;
+            }
             CeceDataStreamConfig stream;
             stream.name = string_or(node, "name");
             conf::Value files = node["file"];
@@ -264,6 +268,28 @@ CeceConfig ParseConfig(const std::string& filename) {
             }
             config.output_config.amio_worker_threads = threads;
         }
+        if (output["amio_staging_buffer_count"]) {
+            int count = output["amio_staging_buffer_count"].as_int();
+            if (count < 1 || count > 4096) {
+                throw std::invalid_argument("output.amio_staging_buffer_count must be in [1, 4096]; got " + std::to_string(count) + ".");
+            }
+            config.output_config.amio_staging_buffer_count = count;
+        }
+        if (output["amio_staging_buffer_capacity_bytes"]) {
+            int capacity = output["amio_staging_buffer_capacity_bytes"].as_int();
+            if (capacity < 1 || capacity > 1073741824) {
+                throw std::invalid_argument("output.amio_staging_buffer_capacity_bytes must be in [1, 1073741824]; got " + std::to_string(capacity) +
+                                            ".");
+            }
+            config.output_config.amio_staging_buffer_capacity_bytes = capacity;
+        }
+        if (output["amio_staging_timeout_ms"]) {
+            int timeout = output["amio_staging_timeout_ms"].as_int();
+            if (timeout < 1 || timeout > 60000) {
+                throw std::invalid_argument("output.amio_staging_timeout_ms must be in [1, 60000]; got " + std::to_string(timeout) + ".");
+            }
+            config.output_config.amio_staging_timeout_ms = timeout;
+        }
     }
 
     conf::Value driver = root["driver"];
@@ -310,6 +336,60 @@ CeceConfig ParseConfig(const std::string& filename) {
             config.driver_config.amio_prefetch_depth = depth;
         }
     }
+
+    // Optional NUOPC field-coupling section. Declares the fields CECE advertises
+    // to a host component. An absent section, or an empty `nuopc:` map, leaves
+    // both lists empty, so CECE advertises nothing and behaves exactly as before
+    // coupling support. Entries are validated against the sections they reference
+    // and sorted alphabetically by key so every rank advertises in identical order
+    // regardless of YAML document order.
+    conf::Value nuopc = root["nuopc"];
+    if (nuopc && nuopc.kind() == conf::Node_Kind::Map) {
+        // The set of input names a host may provide: keys of the meteorology,
+        // scale-factor, and mask mappings (surface met-style inputs). Emission
+        // inventory stream variables are not host-importable in this section.
+        std::set<std::string> input_keys;
+        for (const auto& [k, v] : config.met_mapping) input_keys.insert(k);
+        for (const auto& [k, v] : config.scale_factor_mapping) input_keys.insert(k);
+        for (const auto& [k, v] : config.mask_mapping) input_keys.insert(k);
+
+        auto read_field_map = [&](const conf::Value& node, const std::string& section, const std::set<std::string>& valid_keys,
+                                  const std::string& key_kind, std::vector<std::pair<std::string, NuopcFieldSpec>>& output) {
+            if (!node || node.kind() != conf::Node_Kind::Map) return;
+            for (const auto& key : node.keys()) {
+                if (!valid_keys.count(key)) {
+                    throw std::invalid_argument("nuopc." + section + ": '" + key + "' is not a configured " + key_kind + ".");
+                }
+                conf::Value entry = node[key];
+                if (entry.kind() != conf::Node_Kind::Map) {
+                    throw std::invalid_argument("nuopc." + section + "." + key + " must be a mapping of field attributes.");
+                }
+                for (const auto& sub : entry.keys()) {
+                    if (sub != "standard_name" && sub != "units" && sub != "name") {
+                        throw std::invalid_argument("nuopc." + section + "." + key + ": unknown attribute '" + sub + "'.");
+                    }
+                }
+                NuopcFieldSpec spec;
+                spec.standard_name = string_or(entry, "standard_name");
+                spec.units = string_or(entry, "units");
+                spec.name = string_or(entry, "name");
+                if (spec.standard_name.empty()) {
+                    throw std::invalid_argument("nuopc." + section + "." + key + ": 'standard_name' is required and must be non-empty.");
+                }
+                if (spec.standard_name.find('/') != std::string::npos || spec.name.find('/') != std::string::npos) {
+                    throw std::invalid_argument("nuopc." + section + "." + key + ": 'standard_name' and 'name' must not contain '/'.");
+                }
+                output.emplace_back(key, std::move(spec));
+            }
+            std::sort(output.begin(), output.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        };
+
+        std::set<std::string> species_keys;
+        for (const auto& [species_name, layers] : config.species_layers) species_keys.insert(species_name);
+        read_field_map(nuopc["export_fields"], "export_fields", species_keys, "emission species", config.nuopc.export_fields);
+        read_field_map(nuopc["import_fields"], "import_fields", input_keys, "meteorology/scale-factor/mask input", config.nuopc.import_fields);
+    }
+
     config.output_config.fields.SetTimeUnits(config.driver_config.start_time);
     return config;
 }

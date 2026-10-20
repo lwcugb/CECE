@@ -12,6 +12,8 @@ output/
 
 # Generated configuration files
 cece_data_streams.yaml
+.cece_earthaccess_cache/
+earthaccess_stage/
 
 # OS and IDE files
 .DS_Store
@@ -21,6 +23,10 @@ cece_data_streams.yaml
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.egg-info/
+
+# Python packaging
+dist/
 *.egg-info/
 
 # Python venv
@@ -59,3 +65,5 @@ specs/
 .github/prompts/
 .kiro/
 .vscode/
+
+.scratch/
