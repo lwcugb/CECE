@@ -206,7 +206,7 @@ std::unique_ptr<CeceSimulation> CeceSimulation::create_internal(const std::strin
         } else if (grid.topology == GridTopology::Curvilinear) {
             // 2-D per-cell coordinates flattened row-major (index i + j*nx).
             for (int jrel = 0; jrel < sim->band_.ny_local; ++jrel) {
-                const std::size_t jglob = static_cast<std::size_t>(sim->band_.j0 + jrel);
+                const std::size_t jglob = static_cast<std::size_t>(sim->band_.j0) + static_cast<std::size_t>(jrel);
                 for (int i = 0; i < nx; ++i) {
                     const std::size_t idx = static_cast<std::size_t>(i) + static_cast<std::size_t>(nx) * jrel;
                     const std::size_t src = static_cast<std::size_t>(i) + static_cast<std::size_t>(nx) * jglob;
