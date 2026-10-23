@@ -9,8 +9,8 @@
 #
 # Per-bin size properties (density, lower/upper/effective dry radius) and the
 # bin names live in the shared MICM mechanism file
-# (data/speciation/spc_cb6_gocart.yaml, gas + aerosol species in one file). The
-# aerosol map (data/speciation/map_cb6_gocart.yaml) selects which bins to emit
+# (data/speciation/spc_gocart.yaml, gas + aerosol species in one file). The
+# aerosol map (data/speciation/map_gocart.yaml) selects which bins to emit
 # and their scale factor (identity = 1.0), mirroring the MEGAN3
 # mechanism_file + speciation_file pattern and reusing the same loader.
 
@@ -61,8 +61,8 @@ physics_schemes:
       # Bin properties + names come from the shared mechanism file; the aerosol
       # map selects the bins (seas1..seas5) and their scale. Bin names drive the
       # per-bin export field names above.
-      mechanism_file: data/speciation/spc_cb6_gocart.yaml
-      speciation_file: data/speciation/map_cb6_gocart.yaml
+      mechanism_file: data/speciation/spc_gocart.yaml
+      speciation_file: data/speciation/map_gocart.yaml
       speciation_dataset: SEASALT
 
 cece_data:
